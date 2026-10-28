@@ -135,6 +135,7 @@ const EMPTY_DRAFT: DraftState = {
   title: "",
   prompt: "",
   enabled: true,
+  keepThreadWaiting: false,
   scheduleMode: "fixed",
   intervalMinutes: "15",
   timeOfDay: "09:00",
@@ -1754,6 +1755,27 @@ function ScheduledTaskEditorForm({
             )}
           </div>
 
+          {draft.scheduleMode === "webhook" && draft.threadId ? (
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0 space-y-1">
+                <Label htmlFor="scheduled-task-keep-waiting">Keep thread waiting</Label>
+                <p
+                  id="scheduled-task-keep-waiting-description"
+                  className="text-sm text-muted-foreground"
+                >
+                  Show Waiting between turns while this task is enabled.
+                </p>
+              </div>
+              <Switch
+                id="scheduled-task-keep-waiting"
+                aria-describedby="scheduled-task-keep-waiting-description"
+                checked={draft.keepThreadWaiting}
+                onCheckedChange={(keepThreadWaiting) =>
+                  setDraft((current) => ({ ...current, keepThreadWaiting }))
+                }
+              />
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 space-y-1">
               <Label htmlFor="scheduled-task-enabled">Enabled</Label>

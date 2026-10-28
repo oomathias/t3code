@@ -1817,7 +1817,10 @@ const make = Effect.gen(function* () {
         title,
         prompt: input.prompt,
         enabled: input.enabled ?? true,
-        schedule: input.schedule,
+        schedule:
+          input.schedule.type === "webhook" && input.keepThreadWaiting !== undefined
+            ? { ...input.schedule, keepThreadWaiting: input.keepThreadWaiting }
+            : input.schedule,
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
         workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
@@ -1838,6 +1841,12 @@ const make = Effect.gen(function* () {
               }),
             }),
       };
+      if (input.keepThreadWaiting === true && input.schedule.type !== "webhook") {
+        return yield* failure(
+          "invalid_request",
+          "keepThreadWaiting=true requires a webhook schedule.",
+        );
+      }
       const { task } = yield* scheduledTasks
         .upsert(upsertInput)
         .pipe(
@@ -1893,12 +1902,18 @@ const make = Effect.gen(function* () {
           input.bindToCurrentThread === undefined
             ? existing.workspaceStrategy
             : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+        const schedule = input.schedule ?? existing.schedule;
+        const keepThreadWaiting =
+          input.keepThreadWaiting ?? (threadId === null ? false : undefined);
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
           prompt: input.prompt ?? existing.prompt,
           enabled: input.enabled ?? existing.enabled,
-          schedule: input.schedule ?? existing.schedule,
+          schedule:
+            schedule.type === "webhook" && keepThreadWaiting !== undefined
+              ? { ...schedule, keepThreadWaiting }
+              : schedule,
           projectId: existing.projectId,
           threadId,
           workspaceStrategy,
@@ -1908,6 +1923,12 @@ const make = Effect.gen(function* () {
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };
+        if (input.keepThreadWaiting === true && upsertInput.schedule.type !== "webhook") {
+          return yield* failure(
+            "invalid_request",
+            "keepThreadWaiting=true requires a webhook schedule.",
+          );
+        }
         const { task } = yield* scheduledTasks
           .upsert(upsertInput)
           .pipe(

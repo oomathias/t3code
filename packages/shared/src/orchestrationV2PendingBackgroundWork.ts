@@ -1,5 +1,6 @@
 import type {
   OrchestrationV2PendingBackgroundTask,
+  OrchestrationV2AppThread,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
@@ -232,6 +233,7 @@ export function derivePendingBackgroundWork(input: {
   /** Excludes rolled-back runs; optional only when the caller already filtered them, as SQL shell reads do. */
   readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
   readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
+  readonly webhookHolds?: OrchestrationV2AppThread["webhookHolds"];
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const hasActiveRun =
     input.hasActiveRun ??
@@ -242,9 +244,11 @@ export function derivePendingBackgroundWork(input: {
   if (hasActiveRun) {
     return [];
   }
-  if (input.latestRun == null) {
-    return pullRequestWatchTasks(input.pullRequests);
-  }
+  const appCompletionHolds: PendingBackgroundWorkTask[] = [
+    ...pullRequestWatchTasks(input.pullRequests),
+    ...webhookHoldTasks(input.webhookHolds),
+  ];
+  if (input.latestRun == null) return appCompletionHolds;
   if (!isLatestRunSettledForBackgroundWait(input.latestRun)) {
     return [];
   }
@@ -282,9 +286,20 @@ export function derivePendingBackgroundWork(input: {
     byTaskId.set(taskId, pendingTaskFromTurnItem(taskId, item));
   }
 
-  for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
+  for (const task of appCompletionHolds) byTaskId.set(task.taskId, task);
 
   return Array.from(byTaskId.values());
+}
+
+function webhookHoldTasks(
+  webhookHolds: OrchestrationV2AppThread["webhookHolds"],
+): Array<PendingBackgroundWorkTask> {
+  return (webhookHolds ?? []).map((hold): PendingBackgroundWorkTask => ({
+    taskId: `webhook-hold:${hold.taskId}`,
+    description: `Waiting: ${hold.title}`,
+    kind: "monitor",
+    awaited: true,
+  }));
 }
 
 function pullRequestWatchTasks(

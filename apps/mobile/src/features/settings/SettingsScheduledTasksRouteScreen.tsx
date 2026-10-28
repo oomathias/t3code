@@ -1140,6 +1140,25 @@ function TaskForm({
               ) : null}
             </>
           )}
+          {draft.schedule.mode === "webhook" && draft.task?.threadId ? (
+            <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
+              <View className="min-w-0 flex-1 gap-1">
+                <Text textRole="body" className="text-foreground">
+                  Keep thread waiting
+                </Text>
+                <Text className="text-sm text-foreground-muted">
+                  Show Waiting between turns while this task is enabled.
+                </Text>
+              </View>
+              <ThemedSwitch
+                accessibilityLabel="Keep thread waiting"
+                value={draft.schedule.keepThreadWaiting}
+                onValueChange={(keepThreadWaiting) =>
+                  setDraft({ ...draft, schedule: { ...draft.schedule, keepThreadWaiting } })
+                }
+              />
+            </View>
+          ) : null}
           <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
             <Text textRole="body" className="min-w-0 flex-1 text-foreground">
               Enabled

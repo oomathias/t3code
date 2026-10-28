@@ -60,6 +60,7 @@ export interface DraftState {
   readonly title: string;
   readonly prompt: string;
   readonly enabled: boolean;
+  readonly keepThreadWaiting: boolean;
   readonly scheduleMode: ScheduleMode;
   readonly intervalMinutes: string;
   readonly timeOfDay: string;
@@ -158,6 +159,7 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
     const secret = draft.signatureSecret.trim();
     return {
       type: "webhook",
+      keepThreadWaiting: draft.threadId.length > 0 && draft.keepThreadWaiting,
       signature: draft.signatureEnabled
         ? {
             header: draft.signatureHeader.trim(),
@@ -206,6 +208,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     title: task.title,
     prompt: task.prompt,
     enabled: task.enabled,
+    keepThreadWaiting: schedule.type === "webhook" && schedule.keepThreadWaiting === true,
     scheduleMode:
       schedule.type === "interval" ? "interval" : schedule.type === "webhook" ? "webhook" : "fixed",
     intervalMinutes:

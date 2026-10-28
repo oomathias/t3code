@@ -12,6 +12,7 @@ import {
   ProviderTurnId,
   RunId,
   RuntimeRequestId,
+  ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -99,6 +100,10 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     type: Schema.Literal("scheduled-tasks.cleanup"),
   }),
   Schema.Struct({
+    type: Schema.Literal("scheduled-tasks.release-webhook-holds"),
+    taskIds: Schema.Array(ScheduledTaskId),
+  }),
+  Schema.Struct({
     type: Schema.Literal("terminal.cleanup"),
   }),
   Schema.Struct({
@@ -128,6 +133,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "provider-thread.rollback",
   "checkpoint.capture",
   "scheduled-tasks.cleanup",
+  "scheduled-tasks.release-webhook-holds",
   "terminal.cleanup",
   "preview.cleanup",
   "attachment.cleanup",

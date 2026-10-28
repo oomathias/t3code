@@ -237,6 +237,7 @@ export function deriveThreadStructureRuntime(
       providerThreads: projection.providerThreads,
       turnItems: projection.turnItems,
       activeProviderThreadId: projection.thread.activeProviderThreadId,
+      webhookHolds: projection.thread.webhookHolds,
       runs: projection.runs,
       pullRequests: projection.thread.pullRequests,
     }),

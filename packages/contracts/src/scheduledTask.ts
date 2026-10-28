@@ -129,6 +129,7 @@ const ScheduledTaskWebhookFilters = Schema.Array(ScheduledTaskWebhookFilter)
 
 const ScheduledTaskWebhookSchedule = Schema.Struct({
   type: Schema.Literal("webhook"),
+  keepThreadWaiting: Schema.optional(Schema.Boolean),
   signature: Schema.NullOr(ScheduledTaskWebhookSignature),
   maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(WebhookMaxDeliveryAgeMinutes)),
   dedupe: Schema.optional(ScheduledTaskWebhookDedupe),
@@ -139,6 +140,10 @@ const ScheduledTaskWebhookSchedule = Schema.Struct({
 
 const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
   type: Schema.Literal("webhook"),
+  keepThreadWaiting: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Default false. Keep the linked thread in Waiting between turns while this task is enabled. Webhook delivery does not clear this state.",
+  }),
   signature: Schema.optional(
     Schema.NullOr(
       Schema.Struct({

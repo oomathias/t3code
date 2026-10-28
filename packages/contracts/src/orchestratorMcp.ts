@@ -573,6 +573,10 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   schedule: OrchestratorMcpSchedule,
   title: Schema.optional(OrchestratorMcpTitle),
   enabled: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
+  keepThreadWaiting: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Default false. Keep the linked thread in Waiting between turns while this task is enabled. Webhook delivery does not clear this state.",
+  }),
   bindToCurrentThread: Schema.optional(
     Schema.Boolean.annotate({
       description: "Default true: runs post in this thread. False: new thread per run.",
@@ -635,6 +639,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   title: Schema.optional(OrchestratorMcpTitle),
   schedule: Schema.optional(OrchestratorMcpSchedule),
   enabled: Schema.optional(Schema.Boolean),
+  keepThreadWaiting: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =

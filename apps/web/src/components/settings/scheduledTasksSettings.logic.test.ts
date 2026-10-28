@@ -5,6 +5,7 @@ import {
   type ServerConfig,
   ProviderInstanceId,
   ScheduledTaskId,
+  ThreadId,
   type ScheduledTask,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -202,15 +203,32 @@ describe("webhook scheduled tasks", () => {
     expect(draft.signatureSecret).toBe("");
     expect(scheduleFromDraft(draft)).toEqual({
       type: "webhook",
+      keepThreadWaiting: false,
       signature,
       maxDeliveryAgeMinutes: null,
       dedupe: {},
     });
     expect(scheduleFromDraft({ ...draft, signatureSecret: " new " })).toEqual({
       type: "webhook",
+      keepThreadWaiting: false,
       signature: { ...signature, secret: "new" },
       maxDeliveryAgeMinutes: null,
       dedupe: {},
+    });
+  });
+
+  it("round-trips the Waiting toggle and clears it when the thread is unlinked", () => {
+    const draft = taskToDraft({
+      ...webhookTask,
+      threadId: ThreadId.make("thread:ci"),
+      schedule: { type: "webhook", signature: null, keepThreadWaiting: true },
+    });
+    expect(scheduleFromDraft(draft)).toMatchObject({ keepThreadWaiting: true });
+    expect(scheduleFromDraft({ ...draft, keepThreadWaiting: false })).toMatchObject({
+      keepThreadWaiting: false,
+    });
+    expect(scheduleFromDraft({ ...draft, threadId: "" })).toMatchObject({
+      keepThreadWaiting: false,
     });
   });
 

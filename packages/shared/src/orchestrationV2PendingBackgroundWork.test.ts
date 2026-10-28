@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
+import { ProviderInstanceId, ProviderThreadId, ScheduledTaskId, RunId } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
@@ -17,6 +17,18 @@ describe("backgroundWorkHoldsCompletion", () => {
 });
 
 describe("derivePendingBackgroundWork", () => {
+  it("shows webhook Waiting between turns, while active turns take precedence", () => {
+    const input = {
+      latestRun: { id: RunId.make("run:ci"), ordinal: 1, status: "completed" as const },
+      providerThreads: [],
+      turnItems: [],
+      webhookHolds: [{ taskId: ScheduledTaskId.make("task:ci"), title: "Ref CI" }],
+    };
+    const tasks = derivePendingBackgroundWork(input);
+    expect(tasks).toMatchObject([{ description: "Waiting: Ref CI", awaited: true }]);
+    expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
+    expect(derivePendingBackgroundWork({ ...input, hasActiveRun: true })).toEqual([]);
+  });
   it("takes each subagent item's instance from its joined owner", () => {
     const owner = ProviderInstanceId.make("claude-owner");
     const tasks = derivePendingBackgroundWork({

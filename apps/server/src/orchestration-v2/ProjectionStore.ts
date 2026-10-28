@@ -1626,6 +1626,7 @@ export function threadShellFromProjection(
     providerThreads: projection.providerThreads,
     turnItems: projection.turnItems,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
+    webhookHolds: projection.thread.webhookHolds,
     runs,
     pullRequests: projection.thread.pullRequests,
   });
@@ -6252,6 +6253,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],
                     turnItems: pendingTurnItemsByThreadId.get(thread.id) ?? [],
                     activeProviderThreadId: thread.activeProviderThreadId,
+                    webhookHolds: thread.webhookHolds,
                     hasActiveRun: false,
                     pullRequests: thread.pullRequests,
                   }),
@@ -6409,6 +6411,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],
             turnItems: pendingTurnItemsByThreadId.get(thread.id) ?? [],
             activeProviderThreadId: thread.activeProviderThreadId,
+            webhookHolds: thread.webhookHolds,
             hasActiveRun: row.active_run_id !== null,
             pullRequests: thread.pullRequests,
           }),

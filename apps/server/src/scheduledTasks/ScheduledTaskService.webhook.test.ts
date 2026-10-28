@@ -7,6 +7,7 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliveryId,
   SecretRequestError,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -266,6 +267,54 @@ const withService = <A, E>(
     ),
   );
 
+it.effect("Stop releases only its webhook holds without disabling or changing the tasks", () =>
+  withService(({ service }) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:stop-webhook");
+      const siblingId = ThreadId.make("thread:stop-webhook-sibling");
+      const saved = [];
+      for (const [name, target, enabled] of [
+        ["first", threadId, true],
+        ["second", threadId, true],
+        ["sibling", siblingId, true],
+        ["paused", threadId, false],
+        ["later", threadId, true],
+      ] as const) {
+        const { task } = yield* service.upsert(
+          yield* webhookTaskInput({
+            id: `scheduled-task:stop-${name}`,
+            threadId: target,
+            enabled,
+            schedule: {
+              type: "webhook",
+              keepThreadWaiting: true,
+              maxDeliveryAgeMinutes: 10,
+              dedupe: { replayKey: "{{headers.delivery-id}}" },
+            },
+          }),
+        );
+        saved.push(task);
+      }
+      const taskIds = saved.slice(0, 4).map((task) => task.id);
+      yield* service.releaseWebhookHolds({ threadId, taskIds });
+      yield* service.releaseWebhookHolds({ threadId, taskIds });
+      const current = new Map((yield* service.list()).tasks.map((task) => [task.id, task]));
+      for (const task of saved) {
+        const updated = current.get(task.id);
+        assert.isDefined(updated);
+        assert.equal(updated?.enabled, task.enabled);
+        assert.deepEqual(updated?.webhook, task.webhook);
+        assert.deepEqual(
+          updated?.schedule,
+          task.threadId === threadId && task.enabled && taskIds.includes(task.id)
+            ? { ...task.schedule, keepThreadWaiting: false }
+            : task.schedule,
+        );
+      }
+    }),
+  ),
+);
+
 it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
   withService(({ service, launches }) =>
     Effect.gen(function* () {
@@ -388,6 +437,7 @@ it.effect("checks the configured signature and keeps the secret write-only", () 
       );
       assert.deepEqual(task.schedule, {
         type: "webhook",
+        keepThreadWaiting: false,
         signature: { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" },
         maxDeliveryAgeMinutes: null,
       });
@@ -726,6 +776,18 @@ it.effect("a signature can take the user's secret by ref, which works only once"
         type: "webhook",
         signature: { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=", secretRef },
       });
+      const invalid = yield* service
+        .upsert(
+          yield* webhookTaskInput({
+            threadId: null,
+            schedule: {
+              ...githubSchedule("secret-ref:00000000000000000000000000000001"),
+              keepThreadWaiting: true,
+            },
+          }),
+        )
+        .pipe(Effect.flip);
+      assert.include(invalid.message, "linked to a thread");
       const { task } = yield* service.upsert(
         yield* webhookTaskInput({
           schedule: githubSchedule("secret-ref:00000000000000000000000000000001"),

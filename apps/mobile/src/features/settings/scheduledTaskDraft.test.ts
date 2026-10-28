@@ -14,6 +14,15 @@ import {
 } from "./scheduledTaskDraft";
 
 describe("scheduleDraftForTask", () => {
+  it("round-trips and explicitly clears the Waiting toggle", () => {
+    const draft = scheduleDraftForTask({
+      schedule: { type: "webhook", signature: null, keepThreadWaiting: true },
+    });
+    expect(scheduleFromDraft(draft)).toMatchObject({ keepThreadWaiting: true });
+    expect(scheduleFromDraft({ ...draft, keepThreadWaiting: false })).toMatchObject({
+      keepThreadWaiting: false,
+    });
+  });
   it("opens legacy sub-minute schedules at the writable minimum", () => {
     const draft = scheduleDraftForTask({ schedule: { type: "interval", everyMs: 30_000 } });
     expect(draft.intervalMinutes).toBe("1");
@@ -60,7 +69,13 @@ describe("scheduleDraftForTask", () => {
     const saved = scheduleFromDraft(
       scheduleDraftForTask({ schedule: { type: "webhook", signature } }),
     );
-    expect(saved).toEqual({ type: "webhook", signature, maxDeliveryAgeMinutes: null, dedupe: {} });
+    expect(saved).toEqual({
+      type: "webhook",
+      signature,
+      keepThreadWaiting: false,
+      maxDeliveryAgeMinutes: null,
+      dedupe: {},
+    });
     expect(saved?.type === "webhook" && saved.signature && "secret" in saved.signature).toBe(false);
   });
 

@@ -14,6 +14,7 @@ import {
   ProviderTurnId,
   RunAttemptId,
   RunId,
+  ScheduledTaskId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -26,6 +27,13 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as ThreadLaunchService from "./ThreadLaunchService.ts";
+import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import {
   orchestrationCommandDuration,
   orchestrationCommandsTotal,
@@ -60,6 +68,126 @@ const layerTest = Layer.mergeAll(
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
   ),
+);
+
+it.effect("saved webhook Waiting follows task changes and survives restart", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.make("thread:webhook-hold");
+    const siblingId = ThreadId.make("thread:webhook-hold-sibling");
+    const projectId = ProjectId.make("project:webhook-hold");
+    for (const id of [threadId, siblingId]) {
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: id,
+        projectId,
+        title: "Wait for CI",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+    }
+    const assertWebhookHolds = Effect.fn("assertWebhookHolds")(function* (
+      id: ThreadId,
+      count: number,
+    ) {
+      const shell = yield* store.getThreadShell(id);
+      assert.lengthOf(shell?.pendingBackgroundTasks ?? [], count);
+    });
+    const dependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+      }),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        dispatch: orchestrator.dispatch,
+      }),
+    );
+    const withTasks = <A, E>(
+      body: (service: ScheduledTaskService.ScheduledTaskService["Service"]) => Effect.Effect<A, E>,
+    ) =>
+      Effect.gen(function* () {
+        return yield* body(yield* ScheduledTaskService.ScheduledTaskService);
+      }).pipe(
+        Effect.provide(Layer.fresh(ScheduledTaskService.layer.pipe(Layer.provide(dependencies)))),
+      );
+    const input = {
+      id: ScheduledTaskId.make("scheduled-task:webhook-hold"),
+      title: "Ref CI",
+      prompt: "Read {{body}}",
+      enabled: true,
+      schedule: { type: "webhook" as const },
+      threadId,
+      projectId,
+      workspaceStrategy: { type: "root" as const },
+      modelSelection,
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+    };
+    yield* withTasks((service) =>
+      Effect.gen(function* () {
+        yield* service.upsert(input);
+        yield* assertWebhookHolds(threadId, 0);
+        const holdingTask = {
+          ...input,
+          schedule: { type: "webhook" as const, keepThreadWaiting: true },
+        };
+        yield* service.upsert(holdingTask);
+        yield* assertWebhookHolds(threadId, 1);
+        yield* orchestrator
+          .dispatch({
+            type: "thread.auto-settle",
+            commandId: CommandId.make("auto-settle-webhook-hold"),
+            threadId,
+            snapshotAt: (yield* store.getThread(threadId)).updatedAt,
+          })
+          .pipe(Effect.flip);
+        assert.isNull((yield* store.getThread(threadId)).settledAt);
+        yield* service.upsert(input);
+        yield* assertWebhookHolds(threadId, 1);
+        yield* service.upsert({
+          ...input,
+          schedule: { type: "webhook", keepThreadWaiting: false },
+        });
+        yield* assertWebhookHolds(threadId, 0);
+        yield* service.upsert(holdingTask);
+        yield* service.setEnabled({ id: input.id, enabled: false });
+        yield* assertWebhookHolds(threadId, 0);
+        yield* service.setEnabled({ id: input.id, enabled: true });
+        yield* assertWebhookHolds(threadId, 1);
+        yield* service.upsert({ ...holdingTask, threadId: siblingId });
+        yield* assertWebhookHolds(threadId, 0);
+        yield* assertWebhookHolds(siblingId, 1);
+        yield* service.delete({ id: input.id });
+        yield* assertWebhookHolds(siblingId, 0);
+        yield* service.upsert(holdingTask);
+        yield* service.upsert({ ...input, schedule: { type: "interval", everyMs: 60_000 } });
+        yield* assertWebhookHolds(threadId, 0);
+        yield* service.upsert(holdingTask);
+      }),
+    );
+    yield* orchestrator.dispatch({
+      type: "thread.webhook-holds.sync",
+      commandId: CommandId.make("lose-webhook-projection"),
+      threadId,
+      holds: [],
+    });
+    yield* assertWebhookHolds(threadId, 0);
+    yield* withTasks(() => assertWebhookHolds(threadId, 1));
+    yield* sql`UPDATE scheduled_tasks SET enabled = 0 WHERE task_id = ${input.id}`;
+    yield* withTasks(() => assertWebhookHolds(threadId, 0));
+  }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect(

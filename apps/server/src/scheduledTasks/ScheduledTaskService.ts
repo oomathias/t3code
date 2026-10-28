@@ -240,6 +240,10 @@ export class ScheduledTaskService extends Context.Service<
     ) => Effect.Effect<ScheduledTaskDeleteResult, ScheduledTaskError>;
     /** Deletes only tasks that still target this thread, including their webhook deliveries. */
     readonly deleteForThread: (threadId: ThreadId) => Effect.Effect<void, ScheduledTaskError>;
+    readonly releaseWebhookHolds: (input: {
+      readonly threadId: ThreadId;
+      readonly taskIds: ReadonlyArray<ScheduledTaskId>;
+    }) => Effect.Effect<void, ScheduledTaskError>;
     /** The dispatched thread, or null if dispatch failed; leaves the task's binding unchanged. */
     readonly runNow: (
       input: ScheduledTaskRunNowInput,
@@ -421,6 +425,42 @@ export const layer = Layer.effect(
     // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const notifyChanged = PubSub.publish(changesPubSub, undefined).pipe(Effect.asVoid);
+    const webhookHoldSyncPermit = yield* Semaphore.make(1);
+    const requestsThreadWaiting = (task: ScheduledTask | null) =>
+      task?.schedule.type === "webhook" && task.schedule.keepThreadWaiting === true;
+    const syncThreadWebhookHolds = Effect.fn("ScheduledTaskService.syncThreadWebhookHolds")(
+      function* (threadIds: ReadonlyArray<ThreadId | null | undefined>) {
+        for (const threadId of new Set(threadIds)) {
+          if (threadId == null) continue;
+          const threads = yield* sql`SELECT 1 FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${threadId} AND deleted_at IS NULL`;
+          if (threads.length === 0) continue;
+          const rows = yield* sql<{ task_id: string; title: string }>`
+            SELECT task_id, title FROM scheduled_tasks
+            WHERE thread_id = ${threadId} AND enabled = 1
+              AND CASE WHEN json_valid(schedule_json)
+                THEN json_extract(schedule_json, '$.type') = 'webhook'
+                  AND json_extract(schedule_json, '$.keepThreadWaiting') = 1
+                ELSE 0 END
+            ORDER BY task_id
+          `;
+          const uuid = yield* crypto.randomUUIDv4();
+          yield* threadManagement.dispatch({
+            type: "thread.webhook-holds.sync",
+            commandId: CommandId.make(`webhook-holds:${uuid}`),
+            threadId,
+            holds: rows.map((row) => ({
+              taskId: ScheduledTaskId.make(row.task_id),
+              title: row.title,
+            })),
+          });
+        }
+      },
+      webhookHoldSyncPermit.withPermit,
+      Effect.mapError((cause) =>
+        taskError("Could not update the thread's Waiting state.", { cause }),
+      ),
+    );
 
     const selectAllRows = () =>
       sql<ScheduledTaskRow>`
@@ -626,7 +666,11 @@ export const layer = Layer.effect(
       sql
         .withTransaction(
           sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${id}`.pipe(
-            Effect.andThen(sql`DELETE FROM scheduled_tasks WHERE task_id = ${id}`),
+            Effect.andThen(
+              sql<{
+                thread_id: string | null;
+              }>`DELETE FROM scheduled_tasks WHERE task_id = ${id} RETURNING thread_id`,
+            ),
           ),
         )
         .pipe(
@@ -1066,6 +1110,12 @@ export const layer = Layer.effect(
         input.schedule.type === "webhook"
           ? {
               type: "webhook",
+              keepThreadWaiting:
+                input.schedule.keepThreadWaiting ??
+                (existingTask?.schedule.type === "webhook"
+                  ? existingTask.schedule.keepThreadWaiting
+                  : undefined) ??
+                false,
               signature:
                 input.schedule.signature == null
                   ? null
@@ -1091,6 +1141,11 @@ export const layer = Layer.effect(
               ),
             }
           : input.schedule;
+      if (schedule.type === "webhook" && schedule.keepThreadWaiting && input.threadId == null) {
+        return yield* taskError("Keep thread waiting requires a webhook task linked to a thread.", {
+          taskId: id,
+        });
+      }
       const webhook =
         input.schedule.type === "webhook"
           ? yield* Effect.gen(function* () {
@@ -1161,6 +1216,9 @@ export const layer = Layer.effect(
         runCount: existingTask?.runCount ?? 0,
       };
       yield* saveTask(task, input.requireExisting === true, webhook);
+      if (requestsThreadWaiting(existingTask) || requestsThreadWaiting(task)) {
+        yield* syncThreadWebhookHolds([existingTask?.threadId, task.threadId]);
+      }
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
     });
@@ -1169,7 +1227,10 @@ export const layer = Layer.effect(
       "ScheduledTaskService.setEnabled",
     )(function* (input) {
       const existing = yield* loadTask(input.id);
-      if (existing.enabled === input.enabled) return { task: existing };
+      if (existing.enabled === input.enabled) {
+        if (requestsThreadWaiting(existing)) yield* syncThreadWebhookHolds([existing.threadId]);
+        return { task: existing };
+      }
       const now = yield* localNow;
       const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
       // RETURNING so a task deleted between the load and this UPDATE is a
@@ -1189,6 +1250,7 @@ export const layer = Layer.effect(
       if (updated.length === 0) {
         return yield* taskError("Schedule task not found.", { taskId: input.id });
       }
+      if (requestsThreadWaiting(existing)) yield* syncThreadWebhookHolds([existing.threadId]);
       yield* notifyChanged;
       return {
         task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
@@ -1227,12 +1289,39 @@ export const layer = Layer.effect(
         { discard: true },
       );
 
-    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(forgetWebhookTask(input.id)),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
+    const deleteTask: ScheduledTaskService["Service"]["delete"] = Effect.fn(
+      "ScheduledTaskService.delete",
+    )(function* (input) {
+      const [removed] = yield* deleteRow(input.id);
+      yield* forgetWebhookTask(input.id);
+      if (removed?.thread_id != null) {
+        yield* syncThreadWebhookHolds([ThreadId.make(removed.thread_id)]);
+      }
+      yield* notifyChanged;
+      return { id: input.id };
+    });
+
+    const releaseWebhookHolds: ScheduledTaskService["Service"]["releaseWebhookHolds"] = Effect.fn(
+      "ScheduledTaskService.releaseWebhookHolds",
+    )(function* ({ threadId, taskIds }) {
+      const now = iso(yield* DateTime.now);
+      yield* sql`
+        UPDATE scheduled_tasks
+        SET schedule_json = json_set(schedule_json, '$.keepThreadWaiting', json('false')),
+            updated_at = ${now}
+        WHERE ${sql.in("task_id", taskIds)} AND thread_id = ${threadId} AND enabled = 1
+          AND CASE WHEN json_valid(schedule_json)
+            THEN json_extract(schedule_json, '$.type') = 'webhook'
+              AND json_extract(schedule_json, '$.keepThreadWaiting') = 1
+            ELSE 0 END
+      `.pipe(
+        Effect.mapError((cause) =>
+          taskError("Could not release the thread's Waiting state.", { cause }),
+        ),
       );
+      yield* syncThreadWebhookHolds([threadId]);
+      yield* notifyChanged;
+    });
 
     const deleteForThread = Effect.fn("ScheduledTaskService.deleteForThread")(function* (
       threadId: ThreadId,
@@ -1259,7 +1348,10 @@ export const layer = Layer.effect(
       yield* Effect.forEach(removed, ({ task_id }) => forgetWebhookTask(task_id), {
         discard: true,
       });
-      if (removed.length > 0) yield* notifyChanged;
+      if (removed.length > 0) {
+        yield* syncThreadWebhookHolds([threadId]);
+        yield* notifyChanged;
+      }
     });
 
     const runNow: ScheduledTaskService["Service"]["runNow"] = Effect.fn(
@@ -2131,6 +2223,17 @@ export const layer = Layer.effect(
     });
     yield* scheduler.register("webhook-coalescing", dispatchPending());
 
+    const threadsToReconcile = yield* sql<{ thread_id: string }>`
+      SELECT thread_id FROM scheduled_tasks
+      WHERE thread_id IS NOT NULL AND CASE WHEN json_valid(schedule_json)
+        THEN json_extract(schedule_json, '$.type') = 'webhook'
+          AND json_extract(schedule_json, '$.keepThreadWaiting') = 1
+        ELSE 0 END
+      UNION SELECT thread_id FROM orchestration_v2_projection_threads
+      WHERE json_array_length(payload_json, '$.webhookHolds') > 0 AND deleted_at IS NULL
+    `;
+    yield* syncThreadWebhookHolds(threadsToReconcile.map((row) => ThreadId.make(row.thread_id)));
+
     return ScheduledTaskService.of({
       list,
       subscribeList,
@@ -2138,6 +2241,7 @@ export const layer = Layer.effect(
       setEnabled,
       delete: deleteTask,
       deleteForThread,
+      releaseWebhookHolds,
       runNow,
       rotateWebhookToken,
       listWebhookDeliveries,

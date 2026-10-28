@@ -820,6 +820,29 @@ it.effect(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("thread.stop releases webhook Waiting even without a running turn", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.make("thread:stop-webhook-waiting");
+    yield* createWatchingThread(threadId, 4);
+    yield* orchestrator.dispatch({
+      type: "thread.webhook-holds.sync",
+      commandId: CommandId.make("hold-webhook-waiting"),
+      threadId,
+      holds: [{ taskId: ScheduledTaskId.make("task:webhook-waiting"), title: "Webhook" }],
+    });
+    const commandId = CommandId.make("stop-webhook-waiting");
+    yield* orchestrator.dispatch({ type: "thread.stop", commandId, threadId });
+    const releases = yield* sql`
+      SELECT 1 FROM orchestration_v2_effect_outbox
+      WHERE command_id = ${commandId}
+        AND effect_type = 'scheduled-tasks.release-webhook-holds'
+    `;
+    assert.lengthOf(releases, 1);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect.each([false, true])(
   "a completed watch records whether it ended through Stop (%s)",
   (stopped) =>

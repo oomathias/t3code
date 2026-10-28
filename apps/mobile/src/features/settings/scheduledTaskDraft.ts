@@ -52,6 +52,7 @@ export function scheduledTaskDefaultModel(
 
 export type ScheduleDraft = {
   readonly mode: "fixed_time" | "interval" | "webhook";
+  readonly keepThreadWaiting: boolean;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlyArray<number>;
   readonly intervalMinutes: string;
@@ -67,6 +68,7 @@ export type ScheduleDraft = {
 
 export const DEFAULT_SCHEDULE: ScheduleDraft = {
   mode: "fixed_time",
+  keepThreadWaiting: false,
   timeOfDay: "09:00",
   weekdays: [1, 2, 3, 4, 5],
   intervalMinutes: "15",
@@ -99,6 +101,7 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
       return {
         ...DEFAULT_SCHEDULE,
         mode: "webhook",
+        keepThreadWaiting: task.schedule.keepThreadWaiting === true,
         signature: task.schedule.signature,
         replayKey: task.schedule.dedupe?.replayKey ?? "",
         coalesceKey: task.schedule.dedupe?.coalesceKey ?? "",
@@ -138,6 +141,7 @@ export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSche
     // No secret is sent, so the server keeps the stored one.
     return {
       type: "webhook",
+      keepThreadWaiting: draft.keepThreadWaiting,
       signature:
         draft.signature === null
           ? null
@@ -210,6 +214,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((option) => [option.id, option.value]),
     draft.schedule.mode,
+    draft.schedule.keepThreadWaiting,
     draft.schedule.timeOfDay,
     [...draft.schedule.weekdays].sort((a, b) => a - b),
     draft.schedule.intervalMinutes,

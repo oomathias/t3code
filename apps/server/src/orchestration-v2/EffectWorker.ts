@@ -489,6 +489,22 @@ export const layerExecutor: Layer.Layer<
                   }),
               ),
             );
+          case "scheduled-tasks.release-webhook-holds":
+            return resourceCleanup
+              .releaseWebhookHolds({
+                threadId: effect.threadId,
+                taskIds: effect.request.taskIds,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
           case "terminal.cleanup":
             return resourceCleanup.cleanupTerminals(effect.threadId).pipe(
               Effect.mapError(

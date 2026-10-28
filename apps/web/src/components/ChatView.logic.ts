@@ -1585,6 +1585,7 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
       providerThreads: projection.providerThreads,
       turnItems: projection.turnItems,
       activeProviderThreadId: projection.thread.activeProviderThreadId,
+      webhookHolds: projection.thread.webhookHolds,
       runs: projection.runs,
       pullRequests: projection.thread.pullRequests,
     }),
