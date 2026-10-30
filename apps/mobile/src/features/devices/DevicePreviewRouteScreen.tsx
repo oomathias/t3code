@@ -13,8 +13,10 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import * as Haptics from "expo-haptics";
 import { Accelerometer } from "expo-sensors";
 import { Pressable, StatusBar, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeOut, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { DeviceStreamStatus } from "@t3tools/client-runtime/device/stream";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -98,6 +100,7 @@ export function DevicePreviewScreen({
   const [streamAttempt, setStreamAttempt] = useState(0);
   const [shuttingDown, setShuttingDown] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [streamStatus, setStreamStatus] = useState<DeviceStreamStatus>("connecting");
   const retryHost = useAtomCommand(deviceEnvironment.list);
   const shutdown = useAtomCommand(deviceEnvironment.shutdown, { reportFailure: false });
   const streamRef = useRef<DeviceStreamRef>(null);
@@ -108,6 +111,15 @@ export function DevicePreviewScreen({
     setInputConnected(connected);
     if (connected && !embedded) setControlsVisible(false);
   };
+  // oxlint-disable-next-line react/capitalized-calls -- Gesture.Pan is a gesture factory.
+  const dismissGesture = Gesture.Pan()
+    .enabled(streamStatus !== "streaming")
+    .activeOffsetY(8)
+    .failOffsetX([-30, 30])
+    .runOnJS(true)
+    .onEnd((event) => {
+      if (event.translationY >= 80) onClose();
+    });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the focused route through the navigator once the thread has no device previews
   useEffect(() => {
     if (focused && state.data !== null && previews.length === 0) onClose();
@@ -124,7 +136,7 @@ export function DevicePreviewScreen({
     });
     return () => subscription.remove();
   }, [focused, foreground, embedded]);
-  useHardwareBack(!controlsVisible, () => {
+  useHardwareBack(!controlsVisible && streamStatus === "streaming", () => {
     setControlsVisible(true);
     return true;
   });
@@ -287,6 +299,7 @@ export function DevicePreviewScreen({
           preview={preview}
           streamRef={streamRef}
           onInputConnected={onInputConnected}
+          onStatus={setStreamStatus}
         />
       ) : (
         <View className="flex-1 items-center justify-center gap-4 px-6">
@@ -317,35 +330,37 @@ export function DevicePreviewScreen({
           />
           <DeviceOptionsMenu items={menuItems} />
         </View>
-      ) : controlsVisible ? (
+      ) : controlsVisible || streamStatus !== "streaming" ? (
         <Animated.View
           entering={OVERLAY_ENTERING}
           exiting={OVERLAY_EXITING}
           pointerEvents="box-none"
           className="absolute inset-0"
         >
-          {inputConnected ? (
+          {inputConnected && streamStatus === "streaming" ? (
             <Pressable
               accessibilityLabel="Hide device controls"
               className="absolute inset-0 bg-black/30"
               onPress={() => setControlsVisible(false)}
             />
           ) : null}
-          <View className="px-3" style={{ paddingTop: Math.max(insets.top, 12) }}>
-            <GlassSurface className="flex-row items-center gap-1 p-1">
-              <SheetCloseButton accessibilityLabel="Close device preview" onClose={onClose} />
-              <AppText numberOfLines={1} className="flex-1 text-center font-t3-medium text-base">
-                {preview?.name ?? "Devices"}
-              </AppText>
-              <ControlPill
-                accessibilityLabel="Home"
-                icon="house"
-                disabled={!inputConnected}
-                onPress={pressHome}
-              />
-              <DeviceOptionsMenu items={menuItems} />
-            </GlassSurface>
-          </View>
+          <GestureDetector gesture={dismissGesture}>
+            <View className="px-3" style={{ paddingTop: Math.max(insets.top, 12) }}>
+              <GlassSurface className="flex-row items-center gap-1 p-1">
+                <SheetCloseButton accessibilityLabel="Close device preview" onClose={onClose} />
+                <AppText numberOfLines={1} className="flex-1 text-center font-t3-medium text-base">
+                  {preview?.name ?? "Devices"}
+                </AppText>
+                <ControlPill
+                  accessibilityLabel="Home"
+                  icon="house"
+                  disabled={!inputConnected}
+                  onPress={pressHome}
+                />
+                <DeviceOptionsMenu items={menuItems} />
+              </GlassSurface>
+            </View>
+          </GestureDetector>
         </Animated.View>
       ) : (
         <Pressable
@@ -394,11 +409,13 @@ function OpenDevicePreview({
   preview,
   streamRef,
   onInputConnected,
+  onStatus,
 }: {
   readonly environmentId: EnvironmentId;
   readonly preview: ThreadDevicePreview;
   readonly streamRef: RefObject<DeviceStreamRef | null>;
   readonly onInputConnected: (connected: boolean) => Promise<void>;
+  readonly onStatus: (status: DeviceStreamStatus) => void;
 }) {
   const { session } = preview;
   const { themeVariables } = useAppearancePreferences();
@@ -422,6 +439,7 @@ function OpenDevicePreview({
       }}
       onUnauthorized={onUnauthorized}
       onInputConnected={onInputConnected}
+      onStatus={onStatus}
     />
   ) : (
     <View className="flex-1 items-center justify-center gap-4 px-6">
